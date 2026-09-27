@@ -1,4 +1,4 @@
-name: Check Madagascar Updates
+name: Build Madagascar Docker
 
 on:
   workflow_dispatch:
@@ -9,14 +9,23 @@ on:
     - cron: "0 21 * * 0"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  check-madagascar:
+  build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check Madagascar master
+      # ========================================
+      # 1. 获取当前仓库
+      # ========================================
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ========================================
+      # 2. 获取 Madagascar master 最新版本
+      # ========================================
+      - name: Get Madagascar version
         id: madagascar
         shell: bash
         run: |
@@ -31,7 +40,7 @@ jobs:
 
           cd "$TMP_DIR"
 
-          git init madagascar
+          git init madagascar >/dev/null
           cd madagascar
 
           git remote add origin https://github.com/ahay/src.git
@@ -42,18 +51,19 @@ jobs:
           VERSION=$(echo "$COMMIT_DATE" | tr -d '-')
 
           echo
-          echo "========================================"
-          echo "Madagascar information"
-          echo "========================================"
-          echo "Commit SHA : $COMMIT_SHA"
-          echo "Commit date: $COMMIT_DATE"
-          echo "Version    : $VERSION"
-          echo "========================================"
+          echo "Madagascar information:"
+          echo "  Commit SHA : $COMMIT_SHA"
+          echo "  Commit date: $COMMIT_DATE"
+          echo "  Version    : $VERSION"
+          echo
 
           echo "commit=$COMMIT_SHA" >> "$GITHUB_OUTPUT"
           echo "commit_date=$COMMIT_DATE" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
+      # ========================================
+      # 3. 检查是否已经发布过这个 commit
+      # ========================================
       - name: Check previous release
         id: previous
         shell: bash
@@ -63,7 +73,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo
           echo "========================================"
           echo "Checking previous release"
           echo "========================================"
@@ -77,10 +86,13 @@ jobs:
           echo "$RELEASE_JSON"
 
           if [ "$RELEASE_JSON" = "[]" ]; then
-            echo
-            echo "No previous release found."
             echo "first_build=true" >> "$GITHUB_OUTPUT"
             echo "previous_commit=" >> "$GITHUB_OUTPUT"
+
+            echo
+            echo "No previous release found."
+            echo "This will be the first build."
+
             exit 0
           fi
 
@@ -89,8 +101,8 @@ jobs:
 
           echo
           echo "Previous release:"
-          echo "Tag : $TAG"
-          echo "Name: $NAME"
+          echo "  Tag : $TAG"
+          echo "  Name: $NAME"
 
           RELEASE_BODY=$(gh release view "$TAG" \
             --repo "$GH_REPO" \
@@ -98,10 +110,12 @@ jobs:
             --jq '.body')
 
           echo
-          echo "Previous release notes:"
-          echo "----------------------------------------"
-          echo "$RELEASE_BODY"
-          echo "----------------------------------------"
+          echo "Previous Madagascar commit:"
+          echo "$RELEASE_BODY" \
+            | grep -i "Madagascar upstream commit:" \
+            | head -n 1 \
+            | sed 's/.*:[[:space:]]*//' \
+            || true
 
           PREVIOUS_COMMIT=$(echo "$RELEASE_BODY" \
             | grep -i "Madagascar upstream commit:" \
@@ -110,49 +124,242 @@ jobs:
             || true)
 
           echo
-          echo "Previous Madagascar commit:"
-          echo "${PREVIOUS_COMMIT:-<none>}"
+          echo "Previous commit: ${PREVIOUS_COMMIT:-<none>}"
 
           echo "first_build=false" >> "$GITHUB_OUTPUT"
           echo "previous_commit=$PREVIOUS_COMMIT" >> "$GITHUB_OUTPUT"
 
-      - name: Compare versions
+      # ========================================
+      # 4. 判断是否需要构建
+      # ========================================
+      - name: Determine whether build is required
+        id: decision
         shell: bash
         env:
           CURRENT_COMMIT: ${{ steps.madagascar.outputs.commit }}
-          CURRENT_DATE: ${{ steps.madagascar.outputs.commit_date }}
-          CURRENT_VERSION: ${{ steps.madagascar.outputs.version }}
           PREVIOUS_COMMIT: ${{ steps.previous.outputs.previous_commit }}
           FIRST_BUILD: ${{ steps.previous.outputs.first_build }}
         run: |
           set -euo pipefail
 
-          echo
           echo "========================================"
-          echo "Version comparison"
+          echo "Build decision"
           echo "========================================"
-
-          echo "Current Madagascar:"
-          echo "  SHA  : $CURRENT_COMMIT"
-          echo "  Date : $CURRENT_DATE"
-          echo "  Ver  : $CURRENT_VERSION"
-
-          echo
-          echo "Previous Madagascar:"
-          echo "  SHA  : ${PREVIOUS_COMMIT:-<none>}"
 
           if [ "$FIRST_BUILD" = "true" ]; then
-            echo
-            echo "Result: FIRST BUILD"
-            echo "A Docker build will be required."
+
+            echo "FIRST BUILD"
+            echo "Build is required."
+
+            echo "build=true" >> "$GITHUB_OUTPUT"
 
           elif [ "$CURRENT_COMMIT" = "$PREVIOUS_COMMIT" ]; then
-            echo
-            echo "Result: NO UPDATE"
+
+            echo "NO UPDATE"
             echo "Madagascar master has not changed."
 
+            echo "build=false" >> "$GITHUB_OUTPUT"
+
           else
-            echo
-            echo "Result: UPDATED"
+
+            echo "UPDATED"
             echo "Madagascar master has changed."
+
+            echo "build=true" >> "$GITHUB_OUTPUT"
+
           fi
+
+      # ========================================
+      # 5. 获取 Madagascar 源码
+      # ========================================
+      - name: Download Madagascar source
+        if: steps.decision.outputs.build == 'true'
+        shell: bash
+        env:
+          COMMIT_SHA: ${{ steps.madagascar.outputs.commit }}
+        run: |
+          set -euo pipefail
+
+          echo "========================================"
+          echo "Downloading Madagascar source"
+          echo "========================================"
+
+          git clone --depth=1 \
+            https://github.com/ahay/src.git \
+            RSFSRC
+
+          cd RSFSRC
+
+          ACTUAL_SHA=$(git rev-parse HEAD)
+
+          echo "Expected SHA:"
+          echo "$COMMIT_SHA"
+
+          echo
+          echo "Downloaded SHA:"
+          echo "$ACTUAL_SHA"
+
+          if [ "$ACTUAL_SHA" != "$COMMIT_SHA" ]; then
+            echo
+            echo "ERROR: Madagascar source changed during workflow."
+            echo "Expected: $COMMIT_SHA"
+            echo "Actual  : $ACTUAL_SHA"
+            exit 1
+          fi
+
+          echo
+          echo "Madagascar source verified."
+
+      # ========================================
+      # 6. 构建 full 镜像
+      # ========================================
+      - name: Build full image
+        if: steps.decision.outputs.build == 'true'
+        shell: bash
+        env:
+          VERSION: ${{ steps.madagascar.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          echo "========================================"
+          echo "Building Madagascar FULL"
+          echo "========================================"
+
+          docker build \
+            --platform linux/amd64 \
+            -f Dockerfile.full \
+            -t "madagascar-full:${VERSION}" \
+            -t "madagascar-full:latest" \
+            .
+
+      # ========================================
+      # 7. 构建 slim 镜像
+      # ========================================
+      - name: Build slim image
+        if: steps.decision.outputs.build == 'true'
+        shell: bash
+        env:
+          VERSION: ${{ steps.madagascar.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          echo "========================================"
+          echo "Building Madagascar SLIM"
+          echo "========================================"
+
+          docker build \
+            --platform linux/amd64 \
+            -f Dockerfile.slim \
+            -t "madagascar-slim:${VERSION}" \
+            -t "madagascar-slim:latest" \
+            .
+
+      # ========================================
+      # 8. 导出 full 镜像
+      # ========================================
+      - name: Export full image
+        if: steps.decision.outputs.build == 'true'
+        shell: bash
+        env:
+          VERSION: ${{ steps.madagascar.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          echo "Exporting full image..."
+
+          docker save \
+            "madagascar-full:${VERSION}" \
+            "madagascar-full:latest" \
+            | gzip -c \
+            > "madagascar-full-${VERSION}.tar.gz"
+
+          sha256sum \
+            "madagascar-full-${VERSION}.tar.gz" \
+            > "madagascar-full-${VERSION}.tar.gz.sha256"
+
+      # ========================================
+      # 9. 导出 slim 镜像
+      # ========================================
+      - name: Export slim image
+        if: steps.decision.outputs.build == 'true'
+        shell: bash
+        env:
+          VERSION: ${{ steps.madagascar.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          echo "Exporting slim image..."
+
+          docker save \
+            "madagascar-slim:${VERSION}" \
+            "madagascar-slim:latest" \
+            | gzip -c \
+            > "madagascar-slim-${VERSION}.tar.gz"
+
+          sha256sum \
+            "madagascar-slim-${VERSION}.tar.gz" \
+            > "madagascar-slim-${VERSION}.tar.gz.sha256"
+
+      # ========================================
+      # 10. 创建 GitHub Release
+      # ========================================
+      - name: Create GitHub Release
+        if: steps.decision.outputs.build == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ steps.madagascar.outputs.version }}
+          COMMIT_SHA: ${{ steps.madagascar.outputs.commit }}
+          COMMIT_DATE: ${{ steps.madagascar.outputs.commit_date }}
+        run: |
+          set -euo pipefail
+
+          echo "========================================"
+          echo "Creating GitHub Release"
+          echo "========================================"
+
+          RELEASE_NAME="Madagascar Docker ${VERSION}"
+
+          cat > release-notes.md <<EOF
+          ## Madagascar Docker ${VERSION}
+
+          Madagascar upstream information:
+
+          - Commit: ${COMMIT_SHA}
+          - Commit date: ${COMMIT_DATE}
+          - Architecture: linux/amd64
+
+          ## Docker images
+
+          Full:
+
+          \`madagascar-full:${VERSION}\`
+          \`madagascar-full:latest\`
+
+          Slim:
+
+          \`madagascar-slim:${VERSION}\`
+          \`madagascar-slim:latest\`
+
+          ## Offline images
+
+          The attached \`.tar.gz\` files contain both the version tag and the \`latest\` tag.
+
+          SHA256 checksum files are provided for verification.
+          EOF
+
+          gh release create "${VERSION}" \
+            --repo "$GH_REPO" \
+            --title "$RELEASE_NAME" \
+            --notes-file release-notes.md \
+            "madagascar-full-${VERSION}.tar.gz" \
+            "madagascar-full-${VERSION}.tar.gz.sha256" \
+            "madagascar-slim-${VERSION}.tar.gz" \
+            "madagascar-slim-${VERSION}.tar.gz.sha256"
+
+          echo
+          echo "========================================"
+          echo "Release created successfully"
+          echo "========================================"
+          echo "Release: $RELEASE_NAME"
