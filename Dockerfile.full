@@ -1,9 +1,12 @@
+# 基于 Ubuntu 24.04
 FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 
+# 复制本地源码
 COPY RSFSRC /root/RSFSRC
 WORKDIR /root/RSFSRC
 
+# 安装依赖&&编译安装
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential gcc gfortran make cmake scons \
     libx11-dev libxt-dev libxext-dev libxaw7-dev \
@@ -20,6 +23,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /tmp/* /var/tmp/* \
     && mkdir -p /root/RSFDATA /root/RSFRUN
 
+# 环境变量
 ENV RSFSRC=/root/RSFSRC/
 ENV RSFROOT=/root/RSFAPP/
 ENV RSFDATA=/root/RSFDATA/
