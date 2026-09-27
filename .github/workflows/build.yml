@@ -8,12 +8,16 @@ on:
     # = 周日 21:00 UTC
     - cron: "0 21 * * 0"
 
+permissions:
+  contents: read
+
 jobs:
   check-madagascar:
     runs-on: ubuntu-latest
 
     steps:
       - name: Check Madagascar master
+        id: madagascar
         shell: bash
         run: |
           set -euo pipefail
@@ -27,29 +31,118 @@ jobs:
 
           cd "$TMP_DIR"
 
-          echo "Fetching Madagascar master..."
-
           git init madagascar
           cd madagascar
 
           git remote add origin https://github.com/ahay/src.git
-
           git fetch --depth=1 origin master
 
           COMMIT_SHA=$(git rev-parse FETCH_HEAD)
           COMMIT_DATE=$(git show -s --format=%cs "$COMMIT_SHA")
-
           VERSION=$(echo "$COMMIT_DATE" | tr -d '-')
 
           echo
-          echo "========================================"
-          echo "Madagascar information"
-          echo "========================================"
+          echo "Madagascar information:"
           echo "Commit SHA : $COMMIT_SHA"
           echo "Commit date: $COMMIT_DATE"
           echo "Version    : $VERSION"
-          echo "========================================"
 
           echo "commit=$COMMIT_SHA" >> "$GITHUB_OUTPUT"
           echo "commit_date=$COMMIT_DATE" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Check previous release
+        id: previous
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          echo
+          echo "========================================"
+          echo "Checking previous release"
+          echo "========================================"
+
+          RELEASE_JSON=$(gh release list \
+            --limit 1 \
+            --json tagName,name)
+
+          echo "Release information:"
+          echo "$RELEASE_JSON"
+
+          if [ "$RELEASE_JSON" = "[]" ]; then
+            echo
+            echo "No previous release found."
+            echo "first_build=true" >> "$GITHUB_OUTPUT"
+            echo "previous_commit=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          TAG=$(echo "$RELEASE_JSON" | jq -r '.[0].tagName')
+          NAME=$(echo "$RELEASE_JSON" | jq -r '.[0].name')
+
+          echo
+          echo "Previous release:"
+          echo "Tag : $TAG"
+          echo "Name: $NAME"
+
+          RELEASE_BODY=$(gh release view "$TAG" --json body --jq '.body')
+
+          echo
+          echo "Previous release notes:"
+          echo "----------------------------------------"
+          echo "$RELEASE_BODY"
+          echo "----------------------------------------"
+
+          PREVIOUS_COMMIT=$(echo "$RELEASE_BODY" \
+            | grep -i "Madagascar upstream commit:" \
+            | head -n 1 \
+            | sed 's/.*:[[:space:]]*//' \
+            || true)
+
+          echo
+          echo "Previous Madagascar commit:"
+          echo "${PREVIOUS_COMMIT:-<none>}"
+
+          echo "first_build=false" >> "$GITHUB_OUTPUT"
+          echo "previous_commit=$PREVIOUS_COMMIT" >> "$GITHUB_OUTPUT"
+
+      - name: Compare versions
+        shell: bash
+        env:
+          CURRENT_COMMIT: ${{ steps.madagascar.outputs.commit }}
+          CURRENT_DATE: ${{ steps.madagascar.outputs.commit_date }}
+          CURRENT_VERSION: ${{ steps.madagascar.outputs.version }}
+          PREVIOUS_COMMIT: ${{ steps.previous.outputs.previous_commit }}
+          FIRST_BUILD: ${{ steps.previous.outputs.first_build }}
+        run: |
+          set -euo pipefail
+
+          echo
+          echo "========================================"
+          echo "Version comparison"
+          echo "========================================"
+
+          echo "Current Madagascar:"
+          echo "  SHA  : $CURRENT_COMMIT"
+          echo "  Date : $CURRENT_DATE"
+          echo "  Ver  : $CURRENT_VERSION"
+
+          echo
+          echo "Previous Madagascar:"
+          echo "  SHA  : ${PREVIOUS_COMMIT:-<none>}"
+
+          if [ "$FIRST_BUILD" = "true" ]; then
+            echo
+            echo "Result: FIRST BUILD"
+            echo "A Docker build will be required."
+          elif [ "$CURRENT_COMMIT" = "$PREVIOUS_COMMIT" ]; then
+            echo
+            echo "Result: NO UPDATE"
+            echo "Madagascar master has not changed."
+          else
+            echo
+            echo "Result: UPDATED"
+            echo "Madagascar master has changed."
+          fi
