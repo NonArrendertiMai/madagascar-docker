@@ -4,31 +4,52 @@ on:
   workflow_dispatch:
 
   schedule:
-    # Every Monday at 05:00 Beijing/Singapore time (UTC+8)
-    # GitHub Actions cron uses UTC.
+    # 每周一 05:00（UTC+8）
+    # = 周日 21:00 UTC
     - cron: "0 21 * * 0"
 
 jobs:
-  check-version:
+  check-madagascar:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Get latest Madagascar tag
-        id: madagascar
+      - name: Check Madagascar master
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Checking Madagascar upstream tags..."
+          echo "========================================"
+          echo "Checking Madagascar upstream"
+          echo "========================================"
 
-          git ls-remote --tags --refs https://github.com/ahay/src.git \
-            | awk -F/ '{print $3}' \
-            | sort -V \
-            | tail -n 20
+          TMP_DIR="$(mktemp -d)"
+          trap 'rm -rf "$TMP_DIR"' EXIT
 
-      - name: Show result
-        run: |
-          echo "Madagascar tag check completed."
+          cd "$TMP_DIR"
+
+          echo "Fetching Madagascar master..."
+
+          git init madagascar
+          cd madagascar
+
+          git remote add origin https://github.com/ahay/src.git
+
+          git fetch --depth=1 origin master
+
+          COMMIT_SHA=$(git rev-parse FETCH_HEAD)
+          COMMIT_DATE=$(git show -s --format=%cs "$COMMIT_SHA")
+
+          VERSION=$(echo "$COMMIT_DATE" | tr -d '-')
+
+          echo
+          echo "========================================"
+          echo "Madagascar information"
+          echo "========================================"
+          echo "Commit SHA : $COMMIT_SHA"
+          echo "Commit date: $COMMIT_DATE"
+          echo "Version    : $VERSION"
+          echo "========================================"
+
+          echo "commit=$COMMIT_SHA" >> "$GITHUB_OUTPUT"
+          echo "commit_date=$COMMIT_DATE" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
