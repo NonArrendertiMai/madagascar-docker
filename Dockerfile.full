@@ -1,0 +1,34 @@
+FROM ubuntu:24.04
+ENV DEBIAN_FRONTEND=noninteractive
+
+COPY RSFSRC /root/RSFSRC
+WORKDIR /root/RSFSRC
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential gcc gfortran make cmake scons \
+    libx11-dev libxt-dev libxext-dev libxaw7-dev \
+    libpng-dev libjpeg-dev libtiff-dev \
+    python3 python-is-python3 \
+    git wget curl \
+    man-db ca-certificates \
+    && ./configure --prefix=/root/RSFAPP \
+    && make -j$(nproc) \
+    && make install \
+    && find /root/RSFSRC -name "*.o" -delete \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /tmp/* /var/tmp/* \
+    && mkdir -p /root/RSFDATA /root/RSFRUN
+
+ENV RSFSRC=/root/RSFSRC/
+ENV RSFROOT=/root/RSFAPP/
+ENV RSFDATA=/root/RSFDATA/
+ENV DATAPATH=/root/RSFDATA/
+ENV PATH=$RSFROOT/bin:$PATH
+ENV MANPATH=$RSFROOT/share/man:/usr/share/man
+ENV LD_LIBRARY_PATH=$RSFROOT/lib:$LD_LIBRARY_PATH
+ENV PYTHONPATH=$RSFROOT/lib/python3.12/site-packages:$PYTHONPATH
+ENV JULIA_LOAD_PATH=$RSFROOT/lib:${JULIA_LOAD_PATH}:
+
+WORKDIR /root/RSFRUN
+CMD ["bash"]
