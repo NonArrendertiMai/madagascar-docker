@@ -42,10 +42,13 @@ jobs:
           VERSION=$(echo "$COMMIT_DATE" | tr -d '-')
 
           echo
-          echo "Madagascar information:"
+          echo "========================================"
+          echo "Madagascar information"
+          echo "========================================"
           echo "Commit SHA : $COMMIT_SHA"
           echo "Commit date: $COMMIT_DATE"
           echo "Version    : $VERSION"
+          echo "========================================"
 
           echo "commit=$COMMIT_SHA" >> "$GITHUB_OUTPUT"
           echo "commit_date=$COMMIT_DATE" >> "$GITHUB_OUTPUT"
@@ -66,6 +69,7 @@ jobs:
           echo "========================================"
 
           RELEASE_JSON=$(gh release list \
+            --repo "$GH_REPO" \
             --limit 1 \
             --json tagName,name)
 
@@ -88,7 +92,10 @@ jobs:
           echo "Tag : $TAG"
           echo "Name: $NAME"
 
-          RELEASE_BODY=$(gh release view "$TAG" --json body --jq '.body')
+          RELEASE_BODY=$(gh release view "$TAG" \
+            --repo "$GH_REPO" \
+            --json body \
+            --jq '.body')
 
           echo
           echo "Previous release notes:"
@@ -138,10 +145,12 @@ jobs:
             echo
             echo "Result: FIRST BUILD"
             echo "A Docker build will be required."
+
           elif [ "$CURRENT_COMMIT" = "$PREVIOUS_COMMIT" ]; then
             echo
             echo "Result: NO UPDATE"
             echo "Madagascar master has not changed."
+
           else
             echo
             echo "Result: UPDATED"
